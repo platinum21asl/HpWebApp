@@ -3,7 +3,6 @@ using HertaProjectModels;
 using HertaProjectModels.ViewModel;
 using HertaProjectUtility;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc;
 using Stripe;
 using Stripe.Checkout;

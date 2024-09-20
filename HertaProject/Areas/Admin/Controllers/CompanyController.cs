@@ -1,12 +1,9 @@
-﻿using HertaProjectDataAccess.Data;
-using HertaProjectDataAccess.Repository.IRepository;
-using HertaProjectModels;
-using HertaProjectModels.ViewModel;
+﻿using HertaProjectModels;
 using HertaProjectUtility;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Mvc.Rendering;
-using NuGet.Protocol.Plugins;
+using Newtonsoft.Json;
+using System.Text;
 
 namespace HertaProject.Areas.Admin.Controllers
 {
@@ -14,54 +11,95 @@ namespace HertaProject.Areas.Admin.Controllers
     [Authorize(Roles = SD.Role_Admin)]
     public class CompanyController : Controller
     {
-        private readonly IUnitOfWork _unitOfWork;
-        private readonly IWebHostEnvironment _webHostEnvironment;
-        public CompanyController(IUnitOfWork unitOfWork, IWebHostEnvironment webHostEnvironment)
-        {
-            _unitOfWork = unitOfWork;
-            _webHostEnvironment = webHostEnvironment;
+        private readonly IConfiguration _configuration;
+        private readonly HttpClient _httpClient;
+        private readonly string? _LocalBaseUrl;
 
-        }
-        public IActionResult Index()
+        public CompanyController(HttpClient httpClient, IConfiguration configuration)
         {
-            List<Company> objCompanyList = _unitOfWork.Company.GetAll().ToList();
-          
-            return View(objCompanyList);
+            _configuration = configuration;
+            _httpClient = httpClient;
+            _LocalBaseUrl = _configuration["BaseUrl:Local"];
+        }
+        public async Task<IActionResult> Index()
+        {
+            string requestUrl = $"{_LocalBaseUrl}rest/v1/Company/GetAllCompany";
+            var response = await _httpClient.GetAsync(requestUrl);
+
+            if (response.IsSuccessStatusCode)
+            {
+                var jsonResponse = await response.Content.ReadAsStringAsync();
+                var listObjCompany = JsonConvert.DeserializeObject<List<Company>>(jsonResponse);
+                return View(listObjCompany);
+            }
+
+            return View();
         }
 
-        public IActionResult Upsert(int? id)
+        public async Task<IActionResult> Upsert(int? id)
         {
             if (id == null || id == 0)
             {
-                //create
                 return View(new Company());
             }
             else
             {
-                //update
-                Company companyObj = _unitOfWork.Company.Get(u => u.Id == id);
-                return View(companyObj);
-            }
-            
-        }
+                string requestUrl = $"{_LocalBaseUrl}rest/v1/Company/GetCompanyById/{id}";
+                var response = await _httpClient.GetAsync(requestUrl);
 
-        [HttpPost]
-        public IActionResult Upsert(Company companyObj)
-        {
-            if (ModelState.IsValid)
-            {
-                if (companyObj.Id == 0)
+                if (response.IsSuccessStatusCode)
                 {
-                    _unitOfWork.Company.Add(companyObj);
+                    var jsonResponse = await response.Content.ReadAsStringAsync();
+                    var companyObj = JsonConvert.DeserializeObject<Company>(jsonResponse);
+
+                    return View(companyObj);
                 }
                 else
                 {
-                    _unitOfWork.Company.Update(companyObj);
+                    return NotFound();
                 }
-              
-                _unitOfWork.Save();
-                TempData["success"] = "Company created successfully";
-                return RedirectToAction("Index", "Company");
+            }
+        }
+
+
+        [HttpPost]
+        public async Task<IActionResult> Upsert(Company companyObj)
+        {
+            if (ModelState.IsValid)
+            {
+                string requestUrl = $"{_LocalBaseUrl}rest/v1/Company/Upsert";
+                var companyJson = JsonConvert.SerializeObject(companyObj);
+                var content = new StringContent(companyJson, Encoding.UTF8, "application/json");
+                var response = await _httpClient.PostAsync(requestUrl, content);
+
+                if (companyObj.Id == 0)
+                {
+                    if (response.IsSuccessStatusCode)
+                    {
+                        TempData["success"] = "Company Create successfully";
+                        return RedirectToAction("Index", "Company");
+                    }
+                    else
+                    {
+                        var errorResponse = await response.Content.ReadAsStringAsync();
+                        ModelState.AddModelError(string.Empty, errorResponse);
+                        return View(companyObj);
+                    }
+                }
+                else
+                {
+                    if (response.IsSuccessStatusCode)
+                    {
+                        TempData["success"] = "Company Update successfully";
+                        return RedirectToAction("Index", "Company");
+                    }
+                    else
+                    {
+                        var errorResponse = await response.Content.ReadAsStringAsync();
+                        ModelState.AddModelError(string.Empty, errorResponse);
+                        return View(companyObj);
+                    }
+                }
             }
             else
             {
@@ -69,27 +107,36 @@ namespace HertaProject.Areas.Admin.Controllers
             }
         }
 
-        #region API CALLS
         [HttpGet]
-        public IActionResult GetAll()
+        public async Task<IActionResult> GetAll()
         {
-            List<Company> objCompanyList = _unitOfWork.Company.GetAll().ToList();
-            return Json(new { data = objCompanyList });
-        }
+            string requestUrl = $"{_LocalBaseUrl}rest/v1/Company/GetAllCompany";
+            var response = await _httpClient.GetAsync(requestUrl);
 
-        [HttpDelete]
-        public IActionResult Delete(int? id)
-        {
-            var obj = _unitOfWork.Company.Get(u => u.Id == id);
-            if(obj == null) {
-                return Json(new { success = false, message = "Error while deleting" });
+            if (response.IsSuccessStatusCode)
+            {
+                var jsonResponse = await response.Content.ReadAsStringAsync();
+                var listObjCompany = JsonConvert.DeserializeObject<List<Company>>(jsonResponse);
+                return Json(listObjCompany);
             }
-
-            _unitOfWork.Company.Delete(obj);
-            _unitOfWork.Save();
 
             return Json(new { success = true, message = "Delete Successful" });
         }
-        #endregion
+
+        [HttpDelete]
+        public async Task<IActionResult> Delete(int id)
+        {
+            string requestUrl = $"{_LocalBaseUrl}rest/v1/Company/Delete/{id}";
+            var response = await _httpClient.DeleteAsync(requestUrl);
+
+            if (response.IsSuccessStatusCode)
+            {
+                return Json(new { success = true, message = "Delete Successful" });
+            }
+            else
+            {
+                return Json(new { success = false, message = "Error while deleting" });
+            }
+        }
     }
 }

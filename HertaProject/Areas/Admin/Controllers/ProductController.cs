@@ -1,12 +1,10 @@
-﻿using HertaProjectDataAccess.Data;
-using HertaProjectDataAccess.Repository.IRepository;
-using HertaProjectModels;
+﻿using HertaProjectModels;
 using HertaProjectModels.ViewModel;
 using HertaProjectUtility;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Mvc.Rendering;
-using NuGet.Protocol.Plugins;
+using Newtonsoft.Json;
+using System.Text;
 
 namespace HertaProject.Areas.Admin.Controllers
 {
@@ -14,112 +12,122 @@ namespace HertaProject.Areas.Admin.Controllers
     [Authorize(Roles = SD.Role_Admin)]
     public class ProductController : Controller
     {
-        private readonly IUnitOfWork _unitOfWork;
+        private readonly IConfiguration _configuration;
+        private readonly HttpClient _httpClient;
+        private readonly string? _LocalBaseUrl;
+
+   
         private readonly IWebHostEnvironment _webHostEnvironment;
-        public ProductController(IUnitOfWork unitOfWork, IWebHostEnvironment webHostEnvironment)
+        public ProductController(HttpClient httpClient, IConfiguration configuration, IWebHostEnvironment webHostEnvironment)
         {
-            _unitOfWork = unitOfWork;
+            _configuration = configuration;
+            _httpClient = httpClient;
+            _LocalBaseUrl = _configuration["BaseUrl:Local"];
             _webHostEnvironment = webHostEnvironment;
 
         }
-        public IActionResult Index()
+        public async Task<IActionResult> Index()
         {
-            List<Product> objProductList = _unitOfWork.Product.GetAll(includeProperties:"Category").ToList();
-          
-            return View(objProductList);
-        }
+            string requestUrl = $"{_LocalBaseUrl}rest/v1/Product/GetAllProduct";
+            var response = await _httpClient.GetAsync(requestUrl);
 
-        public IActionResult Upsert(int? id)
-        {
-
-            Company companyObj = _unitOfWork.Company.Get(u => u.Id == id);
-            return Json(new { status = "200", message = "Success", data = companyObj });
-        }
-
-        [HttpPost]
-        public IActionResult Upsert(ProductVM productVM, IFormFile file)
-        {
-            if (ModelState.IsValid)
+            if (response.IsSuccessStatusCode)
             {
-                string wwwRootPath = _webHostEnvironment.WebRootPath;
-                if(file != null)
-                {
-                    string fileName = Guid.NewGuid().ToString() + Path.GetExtension(file.FileName);
-                    string productPath = Path.Combine(wwwRootPath, @"images\product");
+                var jsonResponse = await response.Content.ReadAsStringAsync();
+                var listObjProduct = JsonConvert.DeserializeObject<List<Product>>(jsonResponse);
+                return View(listObjProduct);
+            }
 
-                    if (!string.IsNullOrEmpty(productVM.Product.ImageUrl))
-                    {
-                        // delete the old image
-                        var oldImagePath = 
-                            Path.Combine(wwwRootPath, productVM.Product.ImageUrl.TrimStart('\\'));
+            return View();
+        }
 
-                        if(System.IO.File.Exists(oldImagePath))
-                        {
-                            System.IO.File.Delete(oldImagePath);
-                        }
-                    }
-
-                    using (var fileStream = new FileStream(Path.Combine(productPath, fileName), FileMode.Create))
-                    {
-                        file.CopyTo(fileStream);
-                    }
-
-                    productVM.Product.ImageUrl = @"\images\product\" + fileName;
-                }
-
-                if (productVM.Product.Id == 0)
-                {
-                    _unitOfWork.Product.Add(productVM.Product);
-                }
-                else
-                {
-                    _unitOfWork.Product.Update(productVM.Product);
-                }
-              
-                _unitOfWork.Save();
-                TempData["success"] = "Product created successfully";
-                return RedirectToAction("Index", "Product");
+        public async Task<IActionResult> Upsert(int? id)
+        {
+            if (id == null || id == 0)
+            {
+                return View(new Product());
             }
             else
             {
-                productVM.CategoryList = _unitOfWork.Category.GetAll().Select(u => new SelectListItem
+                string requestUrl = $"{_LocalBaseUrl}rest/v1/Product/GetProductById/{id}";
+                var response = await _httpClient.GetAsync(requestUrl);
+
+                if (response.IsSuccessStatusCode)
                 {
-                    Text = u.Name,
-                    Value = u.Id.ToString(),
-                });
-                return View(productVM);
+                    var jsonResponse = await response.Content.ReadAsStringAsync();
+                    var ProductObj = JsonConvert.DeserializeObject<Product>(jsonResponse);
+
+                    return View(ProductObj);
+                }
+                else
+                {
+                    return NotFound();
+                }
             }
         }
+
+        [HttpPost]
+        public async Task<IActionResult> Upsert(ProductVM productVM, IFormFile file)
+        {
+            string requestUrl = $"{_LocalBaseUrl}/rest/v1/Product/Upsert";
+            using (var multipartContent = new MultipartFormDataContent())
+            {
+                multipartContent.Add(new StringContent(JsonConvert.SerializeObject(productVM), Encoding.UTF8, "application/json"), "productVM");
+                if (file != null)
+                {
+                    var fileContent = new StreamContent(file.OpenReadStream());
+                    multipartContent.Add(fileContent, "file", file.FileName);
+                }
+                var response = await _httpClient.PostAsync(requestUrl, multipartContent);
+                if (response.IsSuccessStatusCode)
+                {
+                    return Json(new { success = true, message = "Product created/updated successfully" });
+                }
+                else
+                {
+                    return Json(new { success = false, message = "Failed to create/update product" });
+                }
+            }
+        }
+
 
         #region API CALLS
         [HttpGet]
-        public IActionResult GetAll()
+        public async Task<IActionResult> GetAll()
         {
-            List<Product> objProductList = _unitOfWork.Product.GetAll(includeProperties: "Category").ToList();
-            return Json(new { data = objProductList });
+            string requestUrl = $"{_LocalBaseUrl}rest/v1/Product/GetAllProduct";
+            var response = await _httpClient.GetAsync(requestUrl);
+            if (response.IsSuccessStatusCode)
+            {
+                var jsonResponse = await response.Content.ReadAsStringAsync();
+                var listObjProduct = JsonConvert.DeserializeObject<List<Product>>(jsonResponse);
+                return Json(listObjProduct);
+            }
+
+            return Json(new { success = false, message = "Error while getting" });
         }
 
         [HttpDelete]
-        public IActionResult Delete(int? id)
+        public async Task<IActionResult> DeleteProduct(int id)
         {
-            var obj = _unitOfWork.Product.Get(u => u.Id == id);
-            if(obj == null) {
-                return Json(new { success = false, message = "Error while deleting" });
-            }
+            string requestUrl = $"{_LocalBaseUrl}/rest/v1/Product/Delete/{id}";
 
-            // delete the old image
-            var oldImagePath =
-                Path.Combine(_webHostEnvironment.WebRootPath, obj.ImageUrl.TrimStart('\\'));
+            // Mengirim permintaan delete ke API
+            var response = await _httpClient.DeleteAsync(requestUrl);
 
-            if (System.IO.File.Exists(oldImagePath))
+            if (response.IsSuccessStatusCode)
             {
-                System.IO.File.Delete(oldImagePath);
+                TempData["success"] = "Product deleted successfully";
+                return RedirectToAction(nameof(Index));
             }
-            _unitOfWork.Product.Delete(obj);
-            _unitOfWork.Save();
-
-            return Json(new { success = true, message = "Delete Successful" });
+            else
+            {
+                // Handle jika terjadi error saat penghapusan
+                TempData["error"] = "Error deleting product";
+                return RedirectToAction(nameof(Index));
+            }
         }
+
         #endregion
     }
 }

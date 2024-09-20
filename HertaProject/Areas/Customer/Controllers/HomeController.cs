@@ -1,11 +1,9 @@
-using HertaProjectDataAccess.Repository.IRepository;
 using HertaProjectModels;
-using HertaProjectUtility;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore.Metadata;
+using Newtonsoft.Json;
 using System.Diagnostics;
-using System.Security.Claims;
+using System.Text;
 
 namespace HertaProject.Areas.Customer.Controllers
 {
@@ -13,60 +11,70 @@ namespace HertaProject.Areas.Customer.Controllers
     public class HomeController : Controller
     {
         private readonly ILogger<HomeController> _logger;
-        private IUnitOfWork _unitOfWork;
+        private readonly IConfiguration _configuration;
+        private readonly HttpClient _httpClient;
+        private readonly string? _LocalBaseUrl;
 
-        public HomeController(ILogger<HomeController> logger, IUnitOfWork unitOfWork)
+        public HomeController(ILogger<HomeController> logger, IConfiguration configuration, HttpClient httpClient)
         {
             _logger = logger;
-            _unitOfWork = unitOfWork;
+            _configuration = configuration;
+            _httpClient = httpClient;
+            _LocalBaseUrl = _configuration["BaseUrl:Local"];
         }
 
-        public IActionResult Index()
+        public async  Task<IActionResult> Index()
         {
-            IEnumerable<Product> productsList = _unitOfWork.Product.GetAll(includeProperties: "Category");
-            return View(productsList);
-        }
+            string requestUrl = $"{_LocalBaseUrl}rest/v1/Home/GetAll";
+            var response = await _httpClient.GetAsync(requestUrl);
 
-        public IActionResult Details(int productId)
-        {
-            ShoppingCart cart = new()
+            if (response.IsSuccessStatusCode)
             {
-                Product = _unitOfWork.Product.Get(u => u.Id == productId, includeProperties: "Category"),
-                Count = 1,
-                ProductId = productId
-            };
-            return View(cart);
+                var jsonResponse = await response.Content.ReadAsStringAsync();
+                var listObjProduct = JsonConvert.DeserializeObject<List<Product>>(jsonResponse);
+                return View(listObjProduct);
+            }
+
+            return View();
         }
+
+        public async Task<IActionResult> Details(int productId)
+        {
+            string requestUrl = $"{_LocalBaseUrl}/rest/v1/Home/Details/{productId}";
+            var response = await _httpClient.GetAsync(requestUrl);
+
+            if (response.IsSuccessStatusCode)
+            {
+                var responseBody = await response.Content.ReadAsStringAsync();
+                ShoppingCart cart = JsonConvert.DeserializeObject<ShoppingCart>(responseBody);
+
+                return View(cart);
+            }
+
+            return BadRequest(new { status = "400", message = "Failed to load product details" });
+        }
+
 
         [HttpPost]
         [Authorize]
-        public IActionResult Details(ShoppingCart shoppingCart)
+        public async Task<IActionResult> Details(ShoppingCart shoppingCart)
         {
-            var claimsIdentity = (ClaimsIdentity)User.Identity;
-            var userId = claimsIdentity.FindFirst(ClaimTypes.NameIdentifier).Value;
-            shoppingCart.ApplicationUserId = userId;
+            string requestUrl = $"{_LocalBaseUrl}/rest/v1/Home/Details";
+            var jsonContent = JsonConvert.SerializeObject(shoppingCart);
+            var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
-            ShoppingCart cartFromDb = _unitOfWork.ShoppingCart.Get(u => u.ApplicationUserId == userId && u.ProductId == shoppingCart.ProductId);
+            var response = await _httpClient.PostAsync(requestUrl, content);
 
-            if(cartFromDb != null)
+            if (response.IsSuccessStatusCode)
             {
-                // Shopping Cart
-                cartFromDb.Count += shoppingCart.Count;
-                _unitOfWork.ShoppingCart.Update(cartFromDb);
-                _unitOfWork.Save();
+                TempData["success"] = "Cart updated successfully";
+                return RedirectToAction(nameof(Index));
             }
             else
             {
-                // add cart
-                _unitOfWork.ShoppingCart.Add(shoppingCart);
-                _unitOfWork.Save();
-                HttpContext.Session.SetInt32(SD.SessionCart,
-                    _unitOfWork.ShoppingCart.GetAll(u => u.ApplicationUserId == userId).Count());
+                TempData["error"] = "Error updating cart";
+                return RedirectToAction(nameof(Index));
             }
-
-            TempData["success"] = "Cart update successfully";
-
-            return RedirectToAction(nameof(Index));
         }
 
         public IActionResult Privacy()

@@ -1,9 +1,9 @@
-﻿using HertaProjectDataAccess.Data;
-using HertaProjectDataAccess.Repository.IRepository;
-using HertaProjectModels;
+﻿using HertaProjectModels;
 using HertaProjectUtility;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Newtonsoft.Json;
+using System.Text;
 
 namespace HertaProject.Areas.Admin.Controllers
 {
@@ -11,17 +11,30 @@ namespace HertaProject.Areas.Admin.Controllers
     [Authorize(Roles = SD.Role_Admin)]
     public class CategoryController : Controller
     {
-        private readonly IUnitOfWork _unitOfWork;
+        private readonly IConfiguration _configuration;
+        private readonly HttpClient _httpClient;
+        private readonly string? _LocalBaseUrl;
 
-        public CategoryController(IUnitOfWork unitOfWork)
+        public CategoryController(HttpClient httpClient, IConfiguration configuration)
         {
-            _unitOfWork = unitOfWork;
+            _configuration = configuration;
+            _httpClient = httpClient;
+            _LocalBaseUrl = _configuration["BaseUrl:Local"];
+
         }
-        public IActionResult Index()
+        public async Task<IActionResult> Index()
         {
-            List<Category> objCategoryList = _unitOfWork.Category.GetAll().ToList();
+            string requestUrl = $"{_LocalBaseUrl}rest/v1/Category/GetAllCategory";
+            var response = await _httpClient.GetAsync(requestUrl);
 
-            return View(objCategoryList);
+            if (response.IsSuccessStatusCode)
+            {
+                var jsonResponse = await response.Content.ReadAsStringAsync();
+                var listObjCategory = JsonConvert.DeserializeObject<List<Category>>(jsonResponse);
+                return View(listObjCategory);
+            }
+
+            return View(); 
         }
 
         public IActionResult Create()
@@ -30,67 +43,100 @@ namespace HertaProject.Areas.Admin.Controllers
         }
 
         [HttpPost]
-        public IActionResult Create(Category category)
+        public async Task<IActionResult> Create(Category category)
         {
-            if (category.Name == category.DisplayOrder.ToString())
+            string requestUrl = $"{_LocalBaseUrl}rest/v1/Category/Create";
+            var categoryJson = JsonConvert.SerializeObject(category);
+            var content = new StringContent(categoryJson, Encoding.UTF8, "application/json");
+            var response = await _httpClient.PostAsync(requestUrl, content);
+            if (response.IsSuccessStatusCode)
             {
-                ModelState.AddModelError("name", "TheDisplayOrder cannot exatly match the Name.");
-            }
-            if (ModelState.IsValid)
-            {
-                _unitOfWork.Category.Add(category);
-                _unitOfWork.Save();
+                var jsonResponse = await response.Content.ReadAsStringAsync();
+
                 TempData["success"] = "Category created successfully";
                 return RedirectToAction("Index", "Category");
             }
-            return View();
+            else
+            {
+                return View();
+            }
         }
 
-        public IActionResult Edit(int? id)
+        public async Task<IActionResult> Edit(int id)
         {
-            if (id == null)
+            string requestUrl = $"{_LocalBaseUrl}rest/v1/Category/GetCategoryById/{id}";
+            var response = await _httpClient.GetAsync(requestUrl);
+
+            if (response.IsSuccessStatusCode)
+            {
+                var jsonResponse = await response.Content.ReadAsStringAsync();
+                var category = JsonConvert.DeserializeObject<Category>(jsonResponse);
+
+                return View(category); 
+            }
+            else
             {
                 return NotFound();
             }
-            Category? category = _unitOfWork.Category.Get(u => u.Id == id);
-            if (category == null) { return NotFound(); }
-            return View(category);
         }
+
 
         [HttpPost]
-        public IActionResult Edit(Category category)
+        public async Task<IActionResult> Edit(Category category)
         {
-            if (ModelState.IsValid)
+            string requestUrl = $"{_LocalBaseUrl}rest/v1/Category/Update";
+            var categoryJson = JsonConvert.SerializeObject(category);
+            var content = new StringContent(categoryJson, Encoding.UTF8, "application/json");
+            var response = await _httpClient.PostAsync(requestUrl, content);
+
+            if (response.IsSuccessStatusCode)
             {
-                _unitOfWork.Category.Update(category);
-                _unitOfWork.Save();
-                TempData["success"] = "Category update successfully";
+                TempData["success"] = "Category updated successfully";
                 return RedirectToAction("Index", "Category");
             }
-            return View();
+            else
+            {
+                var errorResponse = await response.Content.ReadAsStringAsync();
+                ModelState.AddModelError(string.Empty, errorResponse);
+                return View(category);
+            }
         }
 
-        public IActionResult Delete(int? id)
+
+        public async Task<IActionResult> Delete(int? id)
         {
-            if (id == null)
+            string requestUrl = $"{_LocalBaseUrl}rest/v1/Category/GetCategoryById/{id}";
+            var response = await _httpClient.GetAsync(requestUrl);
+
+            if (response.IsSuccessStatusCode)
+            {
+                var jsonResponse = await response.Content.ReadAsStringAsync();
+                var category = JsonConvert.DeserializeObject<Category>(jsonResponse);
+
+                return View(category);
+            }
+            else
             {
                 return NotFound();
             }
-            Category? category = _unitOfWork.Category.Get(u => u.Id == id);
-            if (category == null) { return NotFound(); }
-            return View(category);
         }
 
         [HttpPost, ActionName("Delete")]
-        public IActionResult DeletePost(int? id)
+        public async Task<IActionResult> Delete(int id)
         {
-            Category? obj = _unitOfWork.Category.Get(u => u.Id == id);
-            if (obj == null) { return NotFound(); }
-
-            _unitOfWork.Category.Delete(obj);
-            _unitOfWork.Save();
-            TempData["success"] = "Category delete successfully";
-            return RedirectToAction("Index");
+            string requestUrl = $"{_LocalBaseUrl}rest/v1/Category/DeleteCategory/{id}";
+            var response = await _httpClient.PostAsync(requestUrl, null);
+            if (response.IsSuccessStatusCode)
+            {
+                TempData["success"] = "Category deleted successfully";
+                return RedirectToAction("Index", "Category");
+            }
+            else
+            {
+                var errorResponse = await response.Content.ReadAsStringAsync();
+                ModelState.AddModelError(string.Empty, errorResponse);
+                return RedirectToAction("Index");
+            }
         }
     }
 }
