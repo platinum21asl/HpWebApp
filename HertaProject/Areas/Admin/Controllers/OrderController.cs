@@ -4,9 +4,11 @@ using HertaProjectModels.ViewModel;
 using HertaProjectUtility;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Newtonsoft.Json;
 using Stripe;
 using Stripe.Checkout;
 using System.Security.Claims;
+using System.Text;
 
 namespace HertaProject.Areas.Admin.Controllers
 {
@@ -14,254 +16,244 @@ namespace HertaProject.Areas.Admin.Controllers
     [Authorize]
     public class OrderController : Controller
     {
+        private readonly IConfiguration _configuration;
+        private readonly HttpClient _httpClient;
+        private readonly string? _LocalBaseUrl;
 
-        private readonly IUnitOfWork _unitOfWork;
-        private readonly IWebHostEnvironment _webHostEnvironment;
+
         public OrderVM OrderVM { get; set; }
-        public OrderController(IUnitOfWork unitOfWork, IWebHostEnvironment webHostEnvironment)
+        public OrderController(IConfiguration configuration, HttpClient httpClient)
         {
-            _unitOfWork = unitOfWork;
-            _webHostEnvironment = webHostEnvironment;
-
+            _configuration = configuration;
+            _httpClient = httpClient;
+            _LocalBaseUrl = _configuration["BaseUrl:Local"];
         }
         public IActionResult Index()
         {
             return View();
         }
-        public IActionResult Details(int orderId)
+        public async Task<IActionResult> Details(int orderId)
         {
-            OrderVM = new()
+            string apiUrl = $"{_LocalBaseUrl}rest/v1/Order/Details/{orderId}";
+            var response = await _httpClient.GetAsync(apiUrl);
+
+            if (response.IsSuccessStatusCode)
             {
-                OrderHeader = _unitOfWork.OrderHeader.Get(u => u.Id == orderId, includeProperties: "ApplicationUser"),
-                OrderDetail = _unitOfWork.OrderDetail.GetAll(u => u.OrderHeaderId == orderId, includeProperties: "Product")
-            };
+                var result = await response.Content.ReadAsStringAsync();
 
-            return View(OrderVM);
-        }
+                var orderVM = JsonConvert.DeserializeObject<OrderVM>(result);
 
-        [HttpPost]
-        [Authorize(Roles = SD.Role_Admin + "," + SD.Role_Employee)]
-        public IActionResult UpdateOrderDetails(int orderId)
-        {
-            var orderHeaderFromDb = _unitOfWork.OrderHeader.Get(u => u.Id == OrderVM.OrderHeader.Id);
-            orderHeaderFromDb.Name = OrderVM.OrderHeader.Name;
-            orderHeaderFromDb.PhoneNumber = OrderVM.OrderHeader.PhoneNumber;
-            orderHeaderFromDb.StreetAddress = OrderVM.OrderHeader.StreetAddress;
-            orderHeaderFromDb.City = OrderVM.OrderHeader.City;
-            orderHeaderFromDb.State = OrderVM.OrderHeader.State;
-            orderHeaderFromDb.PostalCode = OrderVM.OrderHeader.PostalCode;
-
-            if (!string.IsNullOrEmpty(OrderVM.OrderHeader.Carrier))
-            {
-                orderHeaderFromDb.Carrier = OrderVM.OrderHeader.Carrier;
-            }
-            if (!string.IsNullOrEmpty(OrderVM.OrderHeader.TrackingNumber))
-            {
-                orderHeaderFromDb.Carrier = OrderVM.OrderHeader.TrackingNumber;
-            }
-
-            _unitOfWork.OrderHeader.Update(orderHeaderFromDb);
-            _unitOfWork.Save();
-
-            TempData["Success"] = "Order Details Updated Successfully.";
-            return RedirectToAction(nameof(Details), new { orderId = orderHeaderFromDb.Id });
-        }
-
-        [HttpPost]
-        [Authorize(Roles = SD.Role_Admin + "," + SD.Role_Employee)]
-        public IActionResult StartProcessing()
-        {
-            _unitOfWork.OrderHeader.UpdateStatus(OrderVM.OrderHeader.Id, SD.StatusInProcess);
-            _unitOfWork.Save();
-            TempData["Success"] = "Order Details Updated Successfully.";
-            return RedirectToAction(nameof(Details), new { orderId = OrderVM.OrderHeader.Id });
-        }
-
-        [HttpPost]
-        [Authorize(Roles = SD.Role_Admin + "," + SD.Role_Employee)]
-        public IActionResult ShipOrder()
-        {
-            var orderHeader = _unitOfWork.OrderHeader.Get(u => u.Id == OrderVM.OrderHeader.Id);
-            orderHeader.TrackingNumber = OrderVM.OrderHeader.TrackingNumber;
-            orderHeader.Carrier = OrderVM.OrderHeader.Carrier;
-            orderHeader.OrderStatus = SD.StatusShipped;
-            orderHeader.ShoppingDate = DateTime.Now;
-
-            if (orderHeader.PaymentStatus == SD.PaymentStatusDelayedPayment)
-            {
-                orderHeader.PaymentDueDate = DateTime.Now.AddDays(30);
-            }
-
-            _unitOfWork.OrderHeader.Update(orderHeader);
-            _unitOfWork.Save();
-            TempData["Success"] = "Order Details Updated Successfully.";
-            return RedirectToAction(nameof(Details), new { orderId = OrderVM.OrderHeader.Id });
-        }
-
-        [HttpPost]
-        [Authorize(Roles = SD.Role_Admin + "," + SD.Role_Employee)]
-        public IActionResult CancelOrder()
-        {
-
-            var orderHeader = _unitOfWork.OrderHeader.Get(u => u.Id == OrderVM.OrderHeader.Id);
-
-            if (orderHeader.PaymentStatus == SD.PaymentStatusApproved)
-            {
-                var options = new RefundCreateOptions
-                {
-                    Reason = RefundReasons.RequestedByCustomer,
-                    PaymentIntent = orderHeader.PaymentIntentId
-                };
-
-                var service = new RefundService();
-                Refund refund = service.Create(options);
-
-                _unitOfWork.OrderHeader.UpdateStatus(orderHeader.Id, SD.StatusCancelled, SD.StatusRefunded);
+                return View(orderVM);
             }
             else
             {
-                _unitOfWork.OrderHeader.UpdateStatus(orderHeader.Id, SD.StatusCancelled, SD.StatusCancelled);
+                return NotFound();
             }
-            _unitOfWork.Save();
-            TempData["Success"] = "Order Cancelled Successfully.";
-            return RedirectToAction(nameof(Details), new { orderId = OrderVM.OrderHeader.Id });
 
         }
+
+
+        [HttpPost]
+        [Authorize(Roles = SD.Role_Admin + "," + SD.Role_Employee)]
+        public async Task<IActionResult> UpdateOrderDetails(int orderId, OrderVM orderVM)
+        {
+            string requestUrl = $"{_LocalBaseUrl}rest/v1/Order/updateOrderDetails/{orderId}";
+
+            var orderDetails = new
+            {
+                orderVM.OrderHeader.Name,
+                orderVM.OrderHeader.PhoneNumber,
+                orderVM.OrderHeader.StreetAddress,
+                orderVM.OrderHeader.City,
+                orderVM.OrderHeader.State,
+                orderVM.OrderHeader.PostalCode,
+                Carrier = string.IsNullOrEmpty(orderVM.OrderHeader.Carrier) ? null : orderVM.OrderHeader.Carrier,
+                TrackingNumber = string.IsNullOrEmpty(orderVM.OrderHeader.TrackingNumber) ? null : orderVM.OrderHeader.TrackingNumber
+            };
+
+            var response = await _httpClient.PostAsJsonAsync(requestUrl, orderDetails);
+
+            if (response.IsSuccessStatusCode)
+            {
+                TempData["Success"] = "Order Details Updated Successfully.";
+                return RedirectToAction(nameof(Details), new { orderId });
+            }
+            else
+            {
+                TempData["Error"] = "Error occurred while updating order details.";
+                return RedirectToAction(nameof(Details), new { orderId });
+            }
+        }
+
+
+        [HttpPost]
+        [Authorize(Roles = SD.Role_Admin + "," + SD.Role_Employee)]
+        public async Task<IActionResult> StartProcessing(int orderId)
+        {
+            string requestUrl = $"{_LocalBaseUrl}rest/v1/Order/StartProcessing/{orderId}";
+
+            var response = await _httpClient.PostAsync(requestUrl, null);
+
+            if (response.IsSuccessStatusCode)
+            {
+                TempData["Success"] = "Order is now In Process.";
+                return RedirectToAction(nameof(Details), new { orderId });
+            }
+            else
+            {
+                TempData["Error"] = "Error occurred while processing the order.";
+                return RedirectToAction(nameof(Details), new { orderId });
+            }
+        }
+
+
+        [HttpPost]
+        [Authorize(Roles = SD.Role_Admin + "," + SD.Role_Employee)]
+        public async Task<IActionResult> ShipOrder(int orderId, string trackingNumber, string carrier)
+        {
+            string requestUrl = $"{_LocalBaseUrl}rest/v1/Order/ShipOrder";
+
+            var formContent = new FormUrlEncodedContent(new[]
+            {
+                new KeyValuePair<string, string>("orderId", orderId.ToString()),
+                new KeyValuePair<string, string>("trackingNumber", trackingNumber),
+                new KeyValuePair<string, string>("carrier", carrier)
+            });
+
+            var response = await _httpClient.PostAsync(requestUrl, formContent);
+
+            if (response.IsSuccessStatusCode)
+            {
+                TempData["Success"] = "Order Shipped Successfully.";
+                return RedirectToAction(nameof(Details), new { orderId });
+            }
+            else
+            {
+                TempData["Error"] = "Error occurred while shipping the order.";
+                return RedirectToAction(nameof(Details), new { orderId });
+            }
+        }
+
+
+        [HttpPost]
+        [Authorize(Roles = SD.Role_Admin + "," + SD.Role_Employee)]
+        public async Task<IActionResult> CancelOrder(int orderId)
+        {
+            string requestUrl = $"{_LocalBaseUrl}rest/v1/Order/CancelOrder";
+      
+            var content = new StringContent(JsonConvert.SerializeObject(orderId), Encoding.UTF8, "application/json");
+            HttpResponseMessage response = await _httpClient.PostAsync(requestUrl, content);
+
+            if (response.IsSuccessStatusCode)
+            {
+                TempData["Success"] = "Order Cancelled Successfully.";
+            }
+            else
+            {
+                TempData["Error"] = "Failed to cancel the order.";
+            }
+
+            return RedirectToAction(nameof(Details), new { orderId = orderId });
+        }
+
 
         [ActionName("Details")]
         [HttpPost]
-        public IActionResult Details_PAY_NOW()
+        public async Task<IActionResult> Details_PAY_NOW(int orderId)
         {
-            OrderVM.OrderHeader = _unitOfWork.OrderHeader
-                .Get(u => u.Id == OrderVM.OrderHeader.Id, includeProperties: "ApplicationUser");
-            OrderVM.OrderDetail = _unitOfWork.OrderDetail
-                .GetAll(u => u.OrderHeaderId == OrderVM.OrderHeader.Id, includeProperties: "Product");
+            string apiUrl = $"{_LocalBaseUrl}rest/v1/Order/Details_PAY_NOW";
 
-            //stripe logic
-            var domain = Request.Scheme + "://" + Request.Host.Value + "/";
-            var options = new SessionCreateOptions
-            {
-                SuccessUrl = domain + $"admin/order/PaymentConfirmation?orderHeaderId={OrderVM.OrderHeader.Id}",
-                CancelUrl = domain + $"admin/order/details?orderId={OrderVM.OrderHeader.Id}",
-                LineItems = new List<SessionLineItemOptions>(),
-                Mode = "payment",
-            };
+            var content = new StringContent(JsonConvert.SerializeObject(new { orderId }), Encoding.UTF8, "application/json");
+            HttpResponseMessage response = await _httpClient.PostAsync(apiUrl, content);
 
-            foreach (var item in OrderVM.OrderDetail)
+            if (response.IsSuccessStatusCode)
             {
-                var sessionLineItem = new SessionLineItemOptions
-                {
-                    PriceData = new SessionLineItemPriceDataOptions
-                    {
-                        UnitAmount = (long)(item.Price * 100), // $20.50 => 2050
-                        Currency = "usd",
-                        ProductData = new SessionLineItemPriceDataProductDataOptions
-                        {
-                            Name = item.Product.Title
-                        }
-                    },
-                    Quantity = item.Count
-                };
-                options.LineItems.Add(sessionLineItem);
+                var locationHeader = response.Headers.Location.ToString();
+                return Redirect(locationHeader); // Mengarahkan pengguna ke Stripe
+            }
+            else
+            {
+                TempData["Error"] = "Failed to initiate payment.";
+                return RedirectToAction(nameof(Details), new { orderId });
             }
 
-
-            var service = new SessionService();
-            Session session = service.Create(options);
-            _unitOfWork.OrderHeader.UpdateStripePaymentID(OrderVM.OrderHeader.Id, session.Id, session.PaymentIntentId);
-            _unitOfWork.Save();
-            Response.Headers.Add("Location", session.Url);
-            return new StatusCodeResult(303);
         }
 
-        public IActionResult PaymentConfirmation(int orderHeaderId)
+        public async Task<IActionResult> PaymentConfirmation(int orderHeaderId)
         {
+            var apiUrl = $"{_LocalBaseUrl}rest/v1/Order/paymentConfirmation/{orderHeaderId}";
+            var response = await _httpClient.GetAsync(apiUrl);
 
-            OrderHeader orderHeader = _unitOfWork.OrderHeader.Get(u => u.Id == orderHeaderId);
-            if (orderHeader.PaymentStatus == SD.PaymentStatusDelayedPayment)
+            if (response.IsSuccessStatusCode)
             {
-                //this is an order by company
+                var content = await response.Content.ReadAsStringAsync();
+                var result = JsonConvert.DeserializeObject<dynamic>(content);
 
-                var service = new SessionService();
-                Session session = service.Get(orderHeader.SessionId);
-
-                if (session.PaymentStatus.ToLower() == "paid")
-                {
-                    _unitOfWork.OrderHeader.UpdateStripePaymentID(orderHeaderId, session.Id, session.PaymentIntentId);
-                    _unitOfWork.OrderHeader.UpdateStatus(orderHeaderId, orderHeader.OrderStatus, SD.PaymentStatusApproved);
-                    _unitOfWork.Save();
-                }
-
-
+                var orderNewHeaderId = result.orderHeaderId;
+                ViewBag.Message = "Payment Confirmation Successful.";
+                return View(orderNewHeaderId);
+            }
+            else
+            {
+                ViewBag.Message = "Failed to confirm payment. Please try again later.";
             }
 
-
-            return View(orderHeaderId);
+            return View();
         }
 
         #region API CALLS
         [HttpGet]
-        public IActionResult GetAll(string status)
+        public async Task<IActionResult> GetAll(string status)
         {
-            IEnumerable<OrderHeader> objOrderHeaders = _unitOfWork.OrderHeader.GetAll(includeProperties: "ApplicationUser").ToList();
+            var apiUrl = $"{_LocalBaseUrl}rest/v1/Order/Order/GetAll?status={status}";
+            var response = await _httpClient.GetAsync(apiUrl);
 
-            if (User.IsInRole(SD.Role_Admin) || User.IsInRole(SD.Role_Employee))
+            if (response.IsSuccessStatusCode)
             {
-                objOrderHeaders = _unitOfWork.OrderHeader.GetAll(includeProperties: "ApplicationUser").ToList();
+                var content = await response.Content.ReadAsStringAsync();
+                var result = JsonConvert.DeserializeObject<dynamic>(content);
+
+                var orderHeaders = result.data.ToObject<List<OrderHeader>>();
+                return Json(new { data = orderHeaders });
             }
             else
             {
-
-                var claimsIdentity = (ClaimsIdentity)User.Identity;
-                var userId = claimsIdentity.FindFirst(ClaimTypes.NameIdentifier).Value;
-
-                objOrderHeaders = _unitOfWork.OrderHeader
-                    .GetAll(u => u.ApplicationUserId == userId, includeProperties: "ApplicationUser");
+                return Json(new { error = "Failed to retrieve data. Please try again later." });
             }
 
-            switch (status)
-            {
-                case "pending":
-                    objOrderHeaders = objOrderHeaders.Where(u => u.PaymentStatus == SD.PaymentStatusDelayedPayment);
-                    break;
-                case "inprocess":
-                    objOrderHeaders = objOrderHeaders.Where(u => u.OrderStatus == SD.StatusInProcess);
-                    break;
-                case "completed":
-                    objOrderHeaders = objOrderHeaders.Where(u => u.OrderStatus == SD.StatusShipped);
-                    break;
-                case "approved":
-                    objOrderHeaders = objOrderHeaders.Where(u => u.OrderStatus == SD.StatusApproved);
-                    break;
-                default:
-                    break;
-
-            }
-            return Json(new { data = objOrderHeaders });
         }
+
 
         [HttpDelete]
-        public IActionResult Delete(int? id)
+        public async Task<IActionResult> Delete(int? id)
         {
-            var obj = _unitOfWork.Product.Get(u => u.Id == id);
-            if (obj == null)
+            if (id == null)
             {
-                return Json(new { success = false, message = "Error while deleting" });
+                return Json(new { success = false, message = "Invalid ID" });
             }
+            var apiUrl = $"{_LocalBaseUrl}rest/v1/Order/Order/Delete/{id}";
+            var response = await _httpClient.DeleteAsync(apiUrl);
 
-            // delete the old image
-            var oldImagePath =
-                Path.Combine(_webHostEnvironment.WebRootPath, obj.ImageUrl.TrimStart('\\'));
-
-            if (System.IO.File.Exists(oldImagePath))
+            if (response.IsSuccessStatusCode)
             {
-                System.IO.File.Delete(oldImagePath);
-            }
-            _unitOfWork.Product.Delete(obj);
-            _unitOfWork.Save();
+                var content = await response.Content.ReadAsStringAsync();
+                var result = JsonConvert.DeserializeObject<dynamic>(content);
 
-            return Json(new { success = true, message = "Delete Successful" });
+                if (result.success)
+                {
+                    return Json(new { success = true, message = "Delete Successful" });
+                }
+                else
+                {
+                    return Json(new { success = false, message = result.message ?? "Error while deleting" });
+                }
+            }
+            else
+            {
+                return Json(new { success = false, message = "Failed to delete. Please try again later." });
+            }
         }
+
         #endregion
     }
 }

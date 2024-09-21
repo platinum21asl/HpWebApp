@@ -79,6 +79,10 @@ namespace HertaProject.Areas.Customer.Controllers
 
         public IActionResult Privacy()
         {
+            //using (var httpClient = new HttpClient())
+            //{
+               
+            //}
             return View();
         }
 

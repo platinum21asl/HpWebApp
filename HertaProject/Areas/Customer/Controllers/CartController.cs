@@ -4,8 +4,12 @@ using HertaProjectModels.ViewModel;
 using HertaProjectUtility;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Newtonsoft.Json;
 using Stripe.Checkout;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Security.Claims;
+using System.Text;
 
 namespace HertaProject.Areas.Customer.Controllers
 {
@@ -13,241 +17,174 @@ namespace HertaProject.Areas.Customer.Controllers
     [Authorize]
     public class CartController : Controller
     {
-        private IUnitOfWork _unitOfWork;
+        private readonly IConfiguration _configuration;
+        private readonly HttpClient _httpClient;
+        private readonly string? _LocalBaseUrl;
+
+
         [BindProperty]
         public ShoppingCartVM ShoppingCartVM { get; set; }
-        public CartController(IUnitOfWork unitOfWork)
+        public CartController(IConfiguration configuration, HttpClient httpClient)
         {
-            _unitOfWork = unitOfWork;
+            _configuration = configuration;
+            _httpClient = httpClient;
+            _LocalBaseUrl = _configuration["BaseUrl:Local"];
         }
 
-        public IActionResult Index()
+        public async Task<IActionResult> Index()
         {
-            var claimsIdentity = (ClaimsIdentity)User.Identity;
-            var userId = claimsIdentity.FindFirst(ClaimTypes.NameIdentifier).Value;
-            ShoppingCartVM = new()
-            {
-                ShoppingCartList = _unitOfWork.ShoppingCart.GetAll(u => u.ApplicationUserId == userId,
-                includeProperties: "Product"),
-                OrderHeader = new()
+            string requestUrl = $"{_LocalBaseUrl}rest/v1/Cart/GetCart";
+            var response = await _httpClient.GetAsync(requestUrl);
 
-            };
-
-            foreach (var cart in ShoppingCartVM.ShoppingCartList)
+            if (response.IsSuccessStatusCode)
             {
-                cart.Price = GetPriceBasedOnQuantity(cart);
-                ShoppingCartVM.OrderHeader.OrderTotal += (cart.Price * cart.Count);
+                var jsonResponse = await response.Content.ReadAsStringAsync();
+                ShoppingCartVM = JsonConvert.DeserializeObject<ShoppingCartVM>(jsonResponse);
             }
+            else
+            {
+                // Handle the error, perhaps set a message in TempData
+                TempData["Error"] = "Unable to retrieve cart data.";
+            }
+
             return View(ShoppingCartVM);
         }
 
-        public IActionResult Summary()
+        public async Task<IActionResult> Summary()
         {
-            var claimsIdentity = (ClaimsIdentity)User.Identity;
-            var userId = claimsIdentity.FindFirst(ClaimTypes.NameIdentifier).Value;
+            string requestUrl = $"{_LocalBaseUrl}rest/v1/Cart/Summary";
+            var response = await _httpClient.GetAsync(requestUrl);
 
-            ShoppingCartVM = new()
+            if (response.IsSuccessStatusCode)
             {
-                ShoppingCartList = _unitOfWork.ShoppingCart.GetAll(u => u.ApplicationUserId == userId,
-                includeProperties: "Product"),
-                OrderHeader = new()
-            };
-
-            ShoppingCartVM.OrderHeader.ApplicationUser = _unitOfWork.ApplicationUser.Get(u => u.Id == userId);
-
-            ShoppingCartVM.OrderHeader.Name = ShoppingCartVM.OrderHeader.ApplicationUser.Name;
-            ShoppingCartVM.OrderHeader.PhoneNumber = ShoppingCartVM.OrderHeader.ApplicationUser.PhoneNumber;
-            ShoppingCartVM.OrderHeader.StreetAddress = ShoppingCartVM.OrderHeader.ApplicationUser.StreetAddress;
-            ShoppingCartVM.OrderHeader.City = ShoppingCartVM.OrderHeader.ApplicationUser.City;
-            ShoppingCartVM.OrderHeader.State = ShoppingCartVM.OrderHeader.ApplicationUser.State;
-            ShoppingCartVM.OrderHeader.PostalCode = ShoppingCartVM.OrderHeader.ApplicationUser.PostalCode;
-
-
-
-            foreach (var cart in ShoppingCartVM.ShoppingCartList)
-            {
-                cart.Price = GetPriceBasedOnQuantity(cart);
-                ShoppingCartVM.OrderHeader.OrderTotal += (cart.Price * cart.Count);
+                var jsonResponse = await response.Content.ReadAsStringAsync();
+                ShoppingCartVM = JsonConvert.DeserializeObject<ShoppingCartVM>(jsonResponse);
             }
+            else
+            {
+                // Handle the error, perhaps set a message in TempData
+                TempData["Error"] = "Unable to retrieve cart summary.";
+            }
+
             return View(ShoppingCartVM);
         }
+
 
         [HttpPost]
         [ActionName("Summary")]
-		public IActionResult SummaryPOST()
-		{
-			var claimsIdentity = (ClaimsIdentity)User.Identity;
-			var userId = claimsIdentity.FindFirst(ClaimTypes.NameIdentifier).Value;
-
-            ShoppingCartVM.ShoppingCartList = _unitOfWork.ShoppingCart.GetAll(u => u.ApplicationUserId == userId,
-                includeProperties: "Product");
-			
-            ShoppingCartVM.OrderHeader.OrderDate = System.DateTime.Now;
-            ShoppingCartVM.OrderHeader.ApplicationUserId = userId;
-
-			ApplicationUser applicationUser = _unitOfWork.ApplicationUser.Get(u => u.Id == userId);
-
-			foreach (var cart in ShoppingCartVM.ShoppingCartList)
-			{
-				cart.Price = GetPriceBasedOnQuantity(cart);
-				ShoppingCartVM.OrderHeader.OrderTotal += (cart.Price * cart.Count);
-			}
-            if(applicationUser.CompanyId.GetValueOrDefault() == 0)
-            {
-                ShoppingCartVM.OrderHeader.PaymentStatus = SD.PaymentStatusPending;
-                ShoppingCartVM.OrderHeader.OrderStatus = SD.StatusPending;
-
-			}
-            else
-            {
-				ShoppingCartVM.OrderHeader.PaymentStatus = SD.PaymentStatusDelayedPayment;
-				ShoppingCartVM.OrderHeader.OrderStatus = SD.StatusApproved;
-			}
-
-            _unitOfWork.OrderHeader.Add(ShoppingCartVM.OrderHeader);
-            _unitOfWork.Save();
-            foreach ( var cart in ShoppingCartVM.ShoppingCartList)
-            {
-                OrderDetail orderDetail = new()
-                {
-                    ProductId = cart.ProductId,
-                    OrderHeaderId = ShoppingCartVM.OrderHeader.Id,
-                    Price = cart.Price,
-                    Count = cart.Count
-                };
-				_unitOfWork.OrderDetail.Add(orderDetail);
-				_unitOfWork.Save();
-			}
-
-            if (applicationUser.CompanyId.GetValueOrDefault() == 0)
-            {
-                // it is a regular customer account and we need  to capture payment
-
-                var domain = "https://localhost:7111/";
-                var options = new Stripe.Checkout.SessionCreateOptions
-                {
-                    SuccessUrl = domain+$"/customer/cart/OrderConfirmation?id={ShoppingCartVM.OrderHeader.Id}",
-                    CancelUrl = domain+"customer/cart/Index",
-                    LineItems = new List<SessionLineItemOptions>(),
-                    Mode = "payment",
-                };
-
-                foreach (var item in ShoppingCartVM.ShoppingCartList)
-                {
-                    var sessionLineItem = new SessionLineItemOptions
-                    {
-                        PriceData = new SessionLineItemPriceDataOptions
-                        {
-                            UnitAmount = (long)(item.Price * 100), // $2,50 => 2050
-                            Currency = "usd",
-                            ProductData = new SessionLineItemPriceDataProductDataOptions
-                            {
-                                Name = item.Product.Title
-                            }
-                        },
-                        Quantity = item.Count
-                    };
-
-                    options.LineItems.Add(sessionLineItem);
-                }
-                var service = new Stripe.Checkout.SessionService();
-                Session session = service.Create(options);
-
-                _unitOfWork.OrderHeader.UpdateStripePaymentID(ShoppingCartVM.OrderHeader.Id, session.Id, session.PaymentIntentId);
-                _unitOfWork.Save();
-
-                Response.Headers.Add("Location", session.Url);
-                return new StatusCodeResult(303);
-            }
-
-            return RedirectToAction(nameof(OrderConfirmation), new { id = ShoppingCartVM.OrderHeader.Id });
-		}
-
-        public IActionResult OrderConfirmation(int id)
+        public async Task<IActionResult> SummaryPOST()
         {
-            OrderHeader orderHeader = _unitOfWork.OrderHeader.Get(u => u.Id == id, includeProperties: "ApplicationUser");
-            if(orderHeader.PaymentStatus != SD.PaymentStatusDelayedPayment)
+            var shoppingCartVM = new ShoppingCartVM();
+            var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            string apiUrl = $"{_LocalBaseUrl}rest/v1/Cart/SummaryPOST";
+
+            _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
+            var postData = new
             {
-                // this is an order by customer
-                var service = new SessionService();
-                Session session = service.Get(orderHeader.SessionId);
+                ShoppingCartVM = shoppingCartVM
+            };
 
-                if(session.PaymentStatus.ToLower() == "paid")
-                {
-                    _unitOfWork.OrderHeader.UpdateStripePaymentID(ShoppingCartVM.OrderHeader.Id, session.Id, session.PaymentIntentId);
-                    _unitOfWork.OrderHeader.UpdateStatus(id, SD.StatusApproved, SD.PaymentStatusApproved);
-                    _unitOfWork.Save();
+            var jsonContent = new StringContent(JsonConvert.SerializeObject(postData), Encoding.UTF8, "application/json");
 
-                }
+            var response = await _httpClient.PostAsync(apiUrl, jsonContent);
 
-                HttpContext.Session.Clear();
-            }
-
-            List<ShoppingCart> shoppingCarts = _unitOfWork.ShoppingCart
-                .GetAll(u => u.ApplicationUserId == orderHeader.ApplicationUserId).ToList();
-
-            _unitOfWork.ShoppingCart.DeleteRange(shoppingCarts);
-            _unitOfWork.Save();
-            return View(id);
-        }
-
-		public IActionResult Plus(int cartId)
-        {
-            var cartFromDb = _unitOfWork.ShoppingCart.Get(u => u.Id == cartId);
-            cartFromDb.Count += 1;
-            _unitOfWork.ShoppingCart.Update(cartFromDb);
-            _unitOfWork.Save();
-
-            return RedirectToAction(nameof(Index));
-        }
-        public IActionResult Minus(int cartId)
-        {
-            var cartFromDb = _unitOfWork.ShoppingCart.Get(u => u.Id == cartId, tracked: true);
-            if (cartFromDb.Count <= 1)
+            if (response.IsSuccessStatusCode)
             {
-                // remove from cart
-                HttpContext.Session.SetInt32(SD.SessionCart, _unitOfWork.ShoppingCart
-                    .GetAll(u => u.ApplicationUserId == cartFromDb.ApplicationUserId).Count() - 1);
-                _unitOfWork.ShoppingCart.Delete(cartFromDb);
+                var jsonResponse = await response.Content.ReadAsStringAsync();
+                var result = JsonConvert.DeserializeObject<dynamic>(jsonResponse);
+                var orderId = (int)result.id;
+
+                return RedirectToAction(nameof(OrderConfirmation), new { id = orderId });
             }
             else
             {
-                cartFromDb.Count -= 1;
-                _unitOfWork.ShoppingCart.Update(cartFromDb);
+                ModelState.AddModelError("", "An error occurred while processing your order. Please try again.");
+                return View("Error");
             }
-
-            _unitOfWork.Save();
-
-            return RedirectToAction(nameof(Index));
-        }
-        public IActionResult Remove(int cartId)
-        {
-            var cartFromDb = _unitOfWork.ShoppingCart.Get(u => u.Id == cartId, tracked:true);
-            // remove from cart
-
-            HttpContext.Session.SetInt32(SD.SessionCart, _unitOfWork.ShoppingCart
-                .GetAll(u => u.ApplicationUserId == cartFromDb.ApplicationUserId).Count() - 1);
-            _unitOfWork.ShoppingCart.Delete(cartFromDb);
-            _unitOfWork.Save();
-            return RedirectToAction(nameof(Index));
         }
 
-        private double GetPriceBasedOnQuantity(ShoppingCart shoppingCart)
+
+        public async Task<IActionResult> OrderConfirmation(int id)
         {
-            if (shoppingCart.Count <= 50)
+          
+            string apiUrl = $"{_LocalBaseUrl}rest/v1/Cart/OrderConfirmation/{id}";
+            _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
+
+            var response = await _httpClient.GetAsync(apiUrl);
+
+            if (response.IsSuccessStatusCode)
             {
-                return (double)shoppingCart.Product.Price;
+                var jsonResponse = await response.Content.ReadAsStringAsync();
+                var result = JsonConvert.DeserializeObject<int>(jsonResponse);
+
+                ViewBag.OrderId = result;
+
+                return View(result);
             }
             else
             {
-                if (shoppingCart.Count <= 100)
-                {
-                    return (double)shoppingCart.Product.Price50;
-                }
-                else
-                {
-                    return (double)shoppingCart.Product.Price100;
-                }
+                ModelState.AddModelError("", "An error occurred while retrieving your order confirmation. Please try again.");
+                return View();
+            }
+        }
+
+
+        public async Task<IActionResult> Plus(int cartId)
+        {
+            string apiUrl = $"{_LocalBaseUrl}rest/v1/Cart/Plus";
+            var content = new StringContent(JsonConvert.SerializeObject(new { cartId }), Encoding.UTF8, "application/json");
+            var response = await _httpClient.PostAsync(apiUrl, content);
+
+            if (response.IsSuccessStatusCode)
+            {
+                return RedirectToAction(nameof(Index));
+            }
+            else
+            {
+                ModelState.AddModelError("", "An error occurred while updating your cart. Please try again.");
+                return RedirectToAction(nameof(Index));
+            }
+
+        }
+
+        public async Task<IActionResult> Minus(int cartId)
+        {
+            string apiUrl = $"{_LocalBaseUrl}rest/v1/Cart/Minus";
+
+            var content = new StringContent(JsonConvert.SerializeObject(new { cartId }), Encoding.UTF8, "application/json");
+            var response = await _httpClient.PostAsync(apiUrl, content);
+
+            if (response.IsSuccessStatusCode)
+            {
+                return RedirectToAction(nameof(Index));
+            }
+            else
+            {
+                ModelState.AddModelError("", "An error occurred while updating your cart. Please try again.");
+                return RedirectToAction(nameof(Index));
+            }
+
+        }
+
+        public async Task<IActionResult> Remove(int cartId)
+        {
+            string apiUrl = $"{_LocalBaseUrl}rest/v1/Cart/Remove";
+
+            var content = new StringContent(JsonConvert.SerializeObject(new { cartId }), Encoding.UTF8, "application/json");
+            var response = await _httpClient.PostAsync(apiUrl, content);
+
+            if (response.IsSuccessStatusCode)
+            {
+            
+                return RedirectToAction(nameof(Index));
+            }
+            else
+            {
+        
+                ModelState.AddModelError("", "An error occurred while updating your cart. Please try again.");
+                return RedirectToAction(nameof(Index));
             }
         }
     }
