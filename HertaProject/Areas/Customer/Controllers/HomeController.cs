@@ -40,7 +40,7 @@ namespace HertaProject.Areas.Customer.Controllers
 
         public async Task<IActionResult> Details(int productId)
         {
-            string requestUrl = $"{_LocalBaseUrl}/rest/v1/Home/Details/{productId}";
+            string requestUrl = $"{_LocalBaseUrl}rest/v1/Home/Details/{productId}";
             var response = await _httpClient.GetAsync(requestUrl);
 
             if (response.IsSuccessStatusCode)

@@ -34,7 +34,7 @@ namespace HertaProject.Areas.Admin.Controllers
         }
         public async Task<IActionResult> Details(int orderId)
         {
-            string apiUrl = $"{_LocalBaseUrl}rest/v1/Order/Details/{orderId}";
+            string apiUrl = $"{_LocalBaseUrl}rest/v1/Order/Details?orderId={orderId}";
             var response = await _httpClient.GetAsync(apiUrl);
 
             if (response.IsSuccessStatusCode)
@@ -57,7 +57,7 @@ namespace HertaProject.Areas.Admin.Controllers
         [Authorize(Roles = SD.Role_Admin + "," + SD.Role_Employee)]
         public async Task<IActionResult> UpdateOrderDetails(int orderId, OrderVM orderVM)
         {
-            string requestUrl = $"{_LocalBaseUrl}rest/v1/Order/updateOrderDetails/{orderId}";
+            string requestUrl = $"{_LocalBaseUrl}rest/v1/Order/updateOrderDetails?orderId={orderId}";
 
             var orderDetails = new
             {

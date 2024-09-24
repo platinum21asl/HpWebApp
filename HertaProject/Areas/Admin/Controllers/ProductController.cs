@@ -16,28 +16,14 @@ namespace HertaProject.Areas.Admin.Controllers
         private readonly HttpClient _httpClient;
         private readonly string? _LocalBaseUrl;
 
-   
-        private readonly IWebHostEnvironment _webHostEnvironment;
         public ProductController(HttpClient httpClient, IConfiguration configuration, IWebHostEnvironment webHostEnvironment)
         {
             _configuration = configuration;
             _httpClient = httpClient;
             _LocalBaseUrl = _configuration["BaseUrl:Local"];
-            _webHostEnvironment = webHostEnvironment;
-
         }
         public async Task<IActionResult> Index()
         {
-            string requestUrl = $"{_LocalBaseUrl}rest/v1/Product/GetAllProduct";
-            var response = await _httpClient.GetAsync(requestUrl);
-
-            if (response.IsSuccessStatusCode)
-            {
-                var jsonResponse = await response.Content.ReadAsStringAsync();
-                var listObjProduct = JsonConvert.DeserializeObject<List<Product>>(jsonResponse);
-                return View(listObjProduct);
-            }
-
             return View();
         }
 
@@ -49,13 +35,13 @@ namespace HertaProject.Areas.Admin.Controllers
             }
             else
             {
-                string requestUrl = $"{_LocalBaseUrl}rest/v1/Product/GetProductById/{id}";
+                string requestUrl = $"{_LocalBaseUrl}rest/v1/Product/GetProductById?id={id}";
                 var response = await _httpClient.GetAsync(requestUrl);
 
                 if (response.IsSuccessStatusCode)
                 {
                     var jsonResponse = await response.Content.ReadAsStringAsync();
-                    var ProductObj = JsonConvert.DeserializeObject<Product>(jsonResponse);
+                    var ProductObj = JsonConvert.DeserializeObject<ProductVM>(jsonResponse);
 
                     return View(ProductObj);
                 }
@@ -101,7 +87,11 @@ namespace HertaProject.Areas.Admin.Controllers
             {
                 var jsonResponse = await response.Content.ReadAsStringAsync();
                 var listObjProduct = JsonConvert.DeserializeObject<List<Product>>(jsonResponse);
-                return Json(listObjProduct);
+                var newListObjProduct = new
+                {
+                    data = listObjProduct
+                };
+                return Json(newListObjProduct);
             }
 
             return Json(new { success = false, message = "Error while getting" });
@@ -110,7 +100,7 @@ namespace HertaProject.Areas.Admin.Controllers
         [HttpDelete]
         public async Task<IActionResult> DeleteProduct(int id)
         {
-            string requestUrl = $"{_LocalBaseUrl}/rest/v1/Product/Delete/{id}";
+            string requestUrl = $"{_LocalBaseUrl}/rest/v1/Product/Delete?id={id}";
 
             // Mengirim permintaan delete ke API
             var response = await _httpClient.DeleteAsync(requestUrl);

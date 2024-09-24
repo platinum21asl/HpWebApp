@@ -23,16 +23,6 @@ namespace HertaProject.Areas.Admin.Controllers
         }
         public async Task<IActionResult> Index()
         {
-            string requestUrl = $"{_LocalBaseUrl}rest/v1/Company/GetAllCompany";
-            var response = await _httpClient.GetAsync(requestUrl);
-
-            if (response.IsSuccessStatusCode)
-            {
-                var jsonResponse = await response.Content.ReadAsStringAsync();
-                var listObjCompany = JsonConvert.DeserializeObject<List<Company>>(jsonResponse);
-                return View(listObjCompany);
-            }
-
             return View();
         }
 
@@ -44,7 +34,7 @@ namespace HertaProject.Areas.Admin.Controllers
             }
             else
             {
-                string requestUrl = $"{_LocalBaseUrl}rest/v1/Company/GetCompanyById/{id}";
+                string requestUrl = $"{_LocalBaseUrl}rest/v1/Company/GetCompanyById?id={id}";
                 var response = await _httpClient.GetAsync(requestUrl);
 
                 if (response.IsSuccessStatusCode)
@@ -117,16 +107,20 @@ namespace HertaProject.Areas.Admin.Controllers
             {
                 var jsonResponse = await response.Content.ReadAsStringAsync();
                 var listObjCompany = JsonConvert.DeserializeObject<List<Company>>(jsonResponse);
-                return Json(listObjCompany);
+                var newListObjCompany = new
+                {
+                    data = listObjCompany
+                };
+                return Json(newListObjCompany);
             }
 
-            return Json(new { success = true, message = "Delete Successful" });
+            return Json(new { success = false, message = "Getting data failed" });
         }
 
         [HttpDelete]
         public async Task<IActionResult> Delete(int id)
         {
-            string requestUrl = $"{_LocalBaseUrl}rest/v1/Company/Delete/{id}";
+            string requestUrl = $"{_LocalBaseUrl}rest/v1/Company/Delete?id={id}";
             var response = await _httpClient.DeleteAsync(requestUrl);
 
             if (response.IsSuccessStatusCode)

@@ -64,7 +64,7 @@ namespace HertaProject.Areas.Admin.Controllers
 
         public async Task<IActionResult> Edit(int id)
         {
-            string requestUrl = $"{_LocalBaseUrl}rest/v1/Category/GetCategoryById/{id}";
+            string requestUrl = $"{_LocalBaseUrl}rest/v1/Category/GetCategoryById?id={id}";
             var response = await _httpClient.GetAsync(requestUrl);
 
             if (response.IsSuccessStatusCode)
@@ -105,7 +105,7 @@ namespace HertaProject.Areas.Admin.Controllers
 
         public async Task<IActionResult> Delete(int? id)
         {
-            string requestUrl = $"{_LocalBaseUrl}rest/v1/Category/GetCategoryById/{id}";
+            string requestUrl = $"{_LocalBaseUrl}rest/v1/Category/GetCategoryById?id={id}";
             var response = await _httpClient.GetAsync(requestUrl);
 
             if (response.IsSuccessStatusCode)
@@ -124,7 +124,7 @@ namespace HertaProject.Areas.Admin.Controllers
         [HttpPost, ActionName("Delete")]
         public async Task<IActionResult> Delete(int id)
         {
-            string requestUrl = $"{_LocalBaseUrl}rest/v1/Category/DeleteCategory/{id}";
+            string requestUrl = $"{_LocalBaseUrl}rest/v1/Category/DeleteCategory?id={id}";
             var response = await _httpClient.PostAsync(requestUrl, null);
             if (response.IsSuccessStatusCode)
             {
